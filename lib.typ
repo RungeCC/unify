@@ -1,5 +1,5 @@
-#let re-num = regex("^(-?\d+(\.|,)?\d*)?(((\+(\d+(\.|,)?\d*)-(\d+(\.|,)?\d*)))|((((\+-)|(-\+))(\d+(\.|,)?\d*))))?(e([-\+]?\d+))?$")
-#let unicode_exponents = (("\u2070", "0"), ("\u00B9", "1"), ("\u00B2", "2"), ("\u00B3", "3"), ("\u2074", "4"), ("\u2075", "5"), ("\u2076", "6"), ("\u2077", "7"), ("\u2078", "8"), ("\u2079", "9"), ("\u207A", "+"), ("\u207B", "-"))
+#let _re-num = regex("^(-?\d+(\.|,)?\d*)?(((\+(\d+(\.|,)?\d*)-(\d+(\.|,)?\d*)))|((((\+-)|(-\+))(\d+(\.|,)?\d*))))?(e([-\+]?\d+))?$")
+#let _unicode-exponents = (("\u2070", "0"), ("\u00B9", "1"), ("\u00B2", "2"), ("\u00B3", "3"), ("\u2074", "4"), ("\u2075", "5"), ("\u2076", "6"), ("\u2077", "7"), ("\u2078", "8"), ("\u2079", "9"), ("\u207A", "+"), ("\u207B", "-"))
 
 #let _format-float(f, decsep: "auto", thousandsep: "#h(0.166667em)") = {
   /// Formats a float with thousands separator.
@@ -10,7 +10,7 @@
   if decsep == "auto" {
     if "," in f {
       decsep = ","
-    } else{
+    } else {
       decsep = "."
     }
   }
@@ -94,8 +94,10 @@
   /// - `multiplier`: The symbol used to indicate multiplication
   /// - `thousandsep`: The separator between the thousands of the float.
 
-  value = str(value).replace(" ", "")//.replace(",", ".")
-  let match-value = value.match(re-num)
+  // str() converts minus "-" of a number to unicode "\u2212"
+  value = str(value).replace("−", "-").replace(" ", "")//.replace(",", ".")
+
+  let match-value = value.match(_re-num)
   assert.ne(match-value, none, message: "invalid number: " + value)
   let captures-value = match-value.captures
 
@@ -174,33 +176,89 @@
       units-short-space.insert(line.at(1), true)
     }
   }
+
   (units, units-short, units-space, units-short-space)
 }
 
-#let (prefixes, prefixes-short) = _prefix-csv("prefixes.csv")
-#let (units, units-short, units-space, units-short-space) = _unit-csv("units.csv")
+#let _add-money-units(data) = {
+  let (units, units-short, units-space, units-short-space) = data
+
+  let array = csv("money.csv", delimiter: ",")
+  for line in array {
+    units.insert(lower(line.at(0)), line.at(2))
+    units-short.insert(line.at(1), line.at(2))
+    if line.at(3) == "false" or line.at(3) == "0" {
+      units-space.insert(lower(line.at(0)), false)
+      units-short-space.insert(line.at(1), false)
+    } else {
+      units-space.insert(lower(line.at(0)), true)
+      units-short-space.insert(line.at(1), true)
+    }
+  }
+  
+  (units, units-short, units-space, units-short-space)
+}
+
+
 #let postfixes = _postfix-csv("postfixes.csv")
 
-#let unicode_exponent_list = for (unicode, ascii) in unicode_exponents {(unicode,)}
-#let exponent_pattern = regex("[" + unicode_exponent_list.join("|") + "]+")
+#let lang-db = state("lang-db",(
+  "en":(
+    "units":(_unit-csv("units-en.csv")),
+    "prefixes":(_prefix-csv("prefixes-en.csv")),
+    ),
+  "ru":(
+    "units":(_unit-csv("units-ru.csv")),
+    "prefixes":(_prefix-csv("prefixes-ru.csv")),
+    ),
+  )
+)
 
-#let _replace_unicode_exponents(unit_str) = {
-  let exponent_matches = unit_str.matches(exponent_pattern)
+// get units
+#let __inits() = {
+  let lang = text.lang
+  let data = lang-db.get()
+  if lang in data {
+    _add-money-units(data.at(lang).units)
+  } else {
+    _add-money-units(data.en.units)
+  }
+}
+
+// get prefixes
+#let __prefixes() = {
+  let lang = text.lang
+  let data = lang-db.get()
+  if lang in data {
+    data.at(lang).prefixes
+  } else {
+    data.en.prefixes
+  }
+}
+
+#let _unicode-exponent-list = for (unicode, ascii) in _unicode-exponents {(unicode,)}
+#let _exponent-pattern = regex("[" + _unicode-exponent-list.join("|") + "]+")
+
+#let _replace-unicode-exponents(unit-str) = {
+  let exponent-matches = unit-str.matches(_exponent-pattern)
   let exponent = ""
-  for match in exponent_matches {
-    
+  for match in exponent-matches {
+
     exponent = "^" + match.text
-    for (unicode, ascii) in unicode_exponents {
+    for (unicode, ascii) in _unicode-exponents {
       exponent = exponent.replace(regex(unicode), ascii)
     }
-    unit_str = unit_str.replace(match.text, exponent)
+    unit-str = unit-str.replace(match.text, exponent)
   }
-  unit_str
+  unit-str
 }
 
 #let chunk(string, cond) = (string: string, cond: cond)
 
-#let _format-unit-short(string, space: "#h(0.166667em)", per: "symbol") = {
+#let _format-unit-short(
+  string, space: "#h(0.166667em)", per: "symbol",
+  units-short, units-short-space, prefixes-short
+) = {
   /// Format a unit using the shorthand notation.
   /// - `string`: String containing the unit.
   /// - `space`: Space between units.
@@ -210,8 +268,8 @@
 
   let formatted = ""
 
-  string = _replace_unicode_exponents(string)
-  
+  string = _replace-unicode-exponents(string)
+
   let split = string
     .replace(regex(" */ *"), "/")
     .replace(regex(" +"), " ")
@@ -311,7 +369,7 @@
     if per-list.len() > 0 {
       formatted += " ("
     }
-    
+
     for (i, chunk) in normal-list.enumerate() {
       let (string: n, cond: space-set) = chunk
       if i != 0 and space-set {
@@ -345,6 +403,11 @@
   /// - `per`: Whether to format the units after `per` with a fraction or exponent.
 
   assert(per == "symbol" or per == "fraction" or per == "/")
+
+  // load data
+  let (units, units-short, units-space, units-short-space) = __inits()
+
+  let (prefixes, prefixes-short) = __prefixes()
 
   let formatted = ""
 
@@ -454,7 +517,7 @@
       unit.at("cond") = units-space.at(u)
       post = true
     } else if u != "" {
-      return _format-unit-short(string, space: space, per: per)
+      return _format-unit-short(string, space: space, per: per, units-short, units-short-space, prefixes-short)
     }
   }
 
@@ -499,11 +562,13 @@
   /// - `space`: Space between units.
   /// - `per`: Whether to format the units after `per` or `/` with a fraction or exponent.
 
-  let formatted-unit = ""
-  formatted-unit = _format-unit(unit, space: space, per: per)
+  context {
+    let formatted-unit = ""
+    formatted-unit = _format-unit(unit, space: space, per: per)
 
-  let formatted = "$" + formatted-unit + "$"
-  eval(formatted)
+    let formatted = "$" + formatted-unit + "$"
+    eval(formatted)
+  }
 }
 
 #let qty(
@@ -518,8 +583,8 @@
   /// - `thousandsep`: The separator between the thousands of the float.
   /// - `per`: Whether to format the units after `per` or `/` with a fraction or exponent.
 
-  value = str(value).replace(" ", "")
-  let match-value = value.match(re-num)
+  value = str(value).replace("−", "-").replace(" ", "")
+  let match-value = value.match(_re-num)
   assert.ne(match-value, none, message: "invalid number: " + value)
   let captures-value = match-value.captures
 
@@ -542,15 +607,17 @@
     thousandsep: thousandsep
   )
 
-  let formatted-unit = ""
-  if rawunit {
-    formatted-unit = space + unit
-  } else {
-    formatted-unit = _format-unit(unit, space: space, per: per)
-  }
+  context {
+    let formatted-unit = ""
+    if rawunit {
+      formatted-unit = space + unit
+    } else {
+      formatted-unit = _format-unit(unit, space: space, per: per)
+    }
 
-  let formatted = "$" + formatted-value + formatted-unit + "$"
-  eval(formatted)
+    let formatted = "$" + formatted-value + formatted-unit + "$"
+    eval(formatted)
+  }
 }
 
 #let _format-range(
@@ -568,14 +635,14 @@
 
   let formatted-value = ""
 
-  formatted-value += _format-float(lower, thousandsep: thousandsep).replace(",", ",#h(0pt)")
+  formatted-value += _format-num(lower, thousandsep: thousandsep).replace(",", ",#h(0pt)")
   if exponent-lower != exponent-upper and exponent-lower != none {
     if lower != none {
       formatted-value += multiplier + " "
     }
     formatted-value += "10^(" + str(exponent-lower) + ")"
   }
-  formatted-value += space + " " + delimiter + " " + space + _format-float(upper, thousandsep: thousandsep).replace(",", ",#h(0pt)")
+  formatted-value += space + " " + delimiter + " " + space + _format-num(upper, thousandsep: thousandsep).replace(",", ",#h(0pt)")
   if exponent-lower != exponent-upper and exponent-upper != none {
     if upper != none {
       formatted-value += multiplier + " "
@@ -601,13 +668,13 @@
   /// - `delimiter`: Symbol between the numbers.
   /// - `space`: Space between the numbers and the delimiter.
   /// - `thousandsep`: The separator between the thousands of the float.
-  lower = str(lower).replace(" ", "")
-  let match-lower = lower.match(re-num)
+  lower = str(lower).replace("−", "-").replace(" ", "")
+  let match-lower = lower.match(_re-num)
   assert.ne(match-lower, none, message: "invalid lower number: " + lower)
   let captures-lower = match-lower.captures
 
-  upper = str(upper).replace(" ", "")
-  let match-upper = upper.match(re-num)
+  upper = str(upper).replace("−", "-").replace(" ", "")
+  let match-upper = upper.match(_re-num)
   assert.ne(match-upper, none, message: "invalid upper number: " + upper)
   let captures-upper = match-upper.captures
 
@@ -641,13 +708,13 @@
   /// - `thousandsep`: The separator between the thousands of the float.
   /// - `per`: Whether to format the units after `per` or `/` with a fraction or exponent.
 
-  lower = str(lower).replace(" ", "")
-  let match-lower = lower.match(re-num)
+  lower = str(lower).replace("−", "-").replace(" ", "")
+  let match-lower = lower.match(_re-num)
   assert.ne(match-lower, none, message: "invalid lower number: " + lower)
   let captures-lower = match-lower.captures
 
-  upper = str(upper).replace(" ", "")
-  let match-upper = upper.match(re-num)
+  upper = str(upper).replace("−", "-").replace(" ", "")
+  let match-upper = upper.match(_re-num)
   assert.ne(match-upper, none, message: "invalid upper number: " + upper)
   let captures-upper = match-upper.captures
 
@@ -663,13 +730,15 @@
     force-parentheses: true
   )
 
-  let formatted-unit = ""
-  if rawunit {
-    formatted-unit = space + unit
-  } else {
-    formatted-unit = _format-unit(unit, space: unitspace, per: per)
-  }
+  context {
+    let formatted-unit = ""
+    if rawunit {
+      formatted-unit = space + unit
+    } else {
+      formatted-unit = _format-unit(unit, space: unitspace, per: per)
+    }
 
-  let formatted = "$" + formatted-value + formatted-unit + "$"
-  eval(formatted)
+    let formatted = "$" + formatted-value + formatted-unit + "$"
+    eval(formatted)
+  }
 }
